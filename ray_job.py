@@ -26,7 +26,11 @@ def wait_until_status(job_id, status_to_wait_for):
             break
         time.sleep(1)
 
+try:
+    wait_until_status(job_id, {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED})
+except KeyboardInterrupt:
+    print("Killing job")
+    client.stop_job(job_id) 
 
-wait_until_status(job_id, {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED})
 logs = client.get_job_logs(job_id)
 print(logs)

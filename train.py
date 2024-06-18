@@ -5,6 +5,11 @@
 #get_ipython().run_line_magic('matplotlib', 'inline')
 #get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
 
+import ray
+import os
+import subprocess
+import logging
+
 import matplotlib.pyplot as plt
 import time
 import torch
@@ -13,48 +18,68 @@ from torch import optim
 import torch.nn.functional as F
 from torchvision import datasets, transforms, models
 
+output_dir = "/home/arand/cat-v-dog-classifier-pytorch/results"
 
-data_dir = "/home/arand/cat_v_dog/training_data" 
+# function to run bash commands
+# print determines whether output is printed
+def bash(command, show_result = True):
+    try:
+        print("Trying:", command)
+        result = subprocess.run(command.split(), capture_output=True, text=True, check=True)
+        if show_result:
+            print(result.stdout)
+    except Exception as e:
+        print("Error occured during:", command)
+        print("Error message:\n")
+        print(e)
 
-# Define transforms for the training data and testing data
-train_transforms = transforms.Compose([transforms.RandomRotation(30),
-                                    transforms.RandomResizedCrop(224),
-                                    transforms.RandomHorizontalFlip(),
-                                    transforms.ToTensor(),
-                                    transforms.Normalize([0.485, 0.456, 0.406],
-                                                            [0.229, 0.224, 0.225])])
-
-test_transforms = transforms.Compose([transforms.Resize(255),
-                                    transforms.CenterCrop(224),
-                                    transforms.ToTensor(),
-                                    transforms.Normalize([0.485, 0.456, 0.406],
-                                                        [0.229, 0.224, 0.225])])
-
-# Pass transforms in here, then run the next cell to see how the transforms look
-train_data = datasets.ImageFolder(data_dir + '/train', transform=train_transforms)
-test_data = datasets.ImageFolder(data_dir + '/test', transform=test_transforms)
-
-train_loader = torch.utils.data.DataLoader(train_data, batch_size=64, shuffle=True)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=64)
-
-train_ref = ray.put(train_loader)
-test_ref = ray.put(test_loader)
+# loads data on remote machine and returns directory
+def load_data():
+    if not os.path.exists("/cat_dog"):
+        bash("sudo mkdir /cat_dog")
+        bash("chmod ugo+rwx /cat_dog")
+        bash("sudo gsutil cp -r gs://yakoa-model-data/Cats_and_dogs/* /cat_dog")
+        bash("sudo unzip /cat_dog/training_data.zip -d /cat_dog", print = False)
+    if not os.path.exists("/cat_dog/training_data"):
+        print("ERROR!!!!! The data directory doesn't exist")
+    return "/cat_dog/training_data"
 
 @ray.remote(num_gpus = 1)
-def train_model(train_ref, test_ref):
+def train_model():
+
+    data_dir = load_data()
+    print(os.listdir(data_dir))
+
+    # Define transforms for the training data and testing data
+    train_transforms = transforms.Compose([transforms.RandomRotation(30),
+                                        transforms.RandomResizedCrop(224),
+                                        transforms.RandomHorizontalFlip(),
+                                        transforms.ToTensor(),
+                                        transforms.Normalize([0.485, 0.456, 0.406],
+                                                                [0.229, 0.224, 0.225])])
+
+    test_transforms = transforms.Compose([transforms.Resize(255),
+                                        transforms.CenterCrop(224),
+                                        transforms.ToTensor(),
+                                        transforms.Normalize([0.485, 0.456, 0.406],
+                                                            [0.229, 0.224, 0.225])])
+
+    # Pass transforms in here, then run the next cell to see how the transforms look
+    train_data = datasets.ImageFolder(data_dir + '/train', transform=train_transforms)
+    test_data = datasets.ImageFolder(data_dir + '/test', transform=test_transforms)
+
+    train_loader = torch.utils.data.DataLoader(train_data, batch_size=64, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(test_data, batch_size=64)
+
+    train_ref = ray.put(train_loader)
+    test_ref = ray.put(test_loader)
 
     trainloader = ray.get(train_ref)
     testloader = ray.get(test_ref)
 
     # We can load in a model such as [DenseNet](http://pytorch.org/docs/0.3.0/torchvision/models.html#id5). Let's print out the model architecture so we can see what's going on.
-
-    # In[3]:
-
-
     model = models.densenet121(pretrained=True)
     print(model)
-
-
     # This model is built out of two main parts, the features and the classifier. The features part is a stack of convolutional layers and overall works as a feature detector that can be fed into a classifier. The classifier part is a single fully-connected layer `(classifier): Linear(in_features=1024, out_features=1000)`. This layer was trained on the ImageNet dataset, so it won't work for our specific problem. That means we need to replace the classifier, but the features will work perfectly on their own. In general, I think about pre-trained networks as amazingly good feature detectors that can be used as the input for simple feed-forward classifiers.
 
     # In[4]:
@@ -168,7 +193,7 @@ def train_model(train_ref, test_ref):
     testaccuracy = []
     totalsteps = []
     
-    epochs = 1
+    epochs = 0
     steps = 0
     running_loss = 0
     print_every = 5
@@ -218,26 +243,21 @@ def train_model(train_ref, test_ref):
                 running_loss = 0
                 model.train()
 
-
-
-
-    # In[15]:
-
-
     checkpoint = {
         'parameters' : model.parameters,
         'state_dict' : model.state_dict()
     }
-    modelref = ray.put(checkpoint)
+    modelref = ray.put(checkpoint)  # pass checkpoint to ray
     # return stuff
-    training_progress = (traininglosses, testinglosses, testaccuracy, totalsteps)
+    training_record = (traininglosses, testinglosses, testaccuracy, totalsteps)
     return (training_record, modelref)
 
-
-training_record, model = ray.get(train_model.remote())
-torch.save(model, './catvdog.pth')
-
-
+training_record, modelref = ray.get(train_model.remote())
+print("a")
+model = ray.get(modelref)
+print("b")
+torch.save(model, savedir + '/catvdog.pth')
+print("c")
 (traininglosses, testinglosses, testaccuracy, totalsteps) = training_record
 
 plt.plot(totalsteps, traininglosses, label='Train Loss')
@@ -245,4 +265,5 @@ plt.plot(totalsteps, testinglosses, label='Test Loss')
 plt.plot(totalsteps, testaccuracy, label='Test Accuracy')
 plt.legend()
 plt.grid()
-plt.savefig('training_progress.png')
+plt.savefig(savedir + '/training_progress.png')
+
