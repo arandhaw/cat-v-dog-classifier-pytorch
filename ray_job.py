@@ -1,16 +1,6 @@
 from ray.job_submission import JobSubmissionClient, JobStatus
 import time
 
-# If using a remote cluster, replace 127.0.0.1 with the head node's IP address.
-client = JobSubmissionClient("http://127.0.0.1:8265")
-job_id = client.submit_job(
-    # Entrypoint shell command to execute
-    entrypoint="python train.py",
-    # Path to the local directory that contains the script.py file
-    runtime_env={"working_dir": "./"}
-)
-print(job_id)
-
 # 5 states: PENDING, RUNNING, SUCCEEDED, FAILED, STOPPED
 # loops until a state in status_to_wait_for is reached
 def wait_until_status(job_id, status_to_wait_for):
@@ -26,11 +16,20 @@ def wait_until_status(job_id, status_to_wait_for):
             break
         time.sleep(1)
 
-try:
-    wait_until_status(job_id, {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED})
-except KeyboardInterrupt:
-    print("Killing job")
-    client.stop_job(job_id) 
-
-logs = client.get_job_logs(job_id)
-print(logs)
+if __name__ == '__main__':
+    # If using a remote cluster, replace 127.0.0.1 with the head node's IP address.
+    client = JobSubmissionClient("http://127.0.0.1:8265")
+    job_id = client.submit_job(
+        # Entrypoint shell command to execute
+        entrypoint="python train.py",
+        # Path to the local directory that contains the script.py file
+        runtime_env={"working_dir": "./"}
+    )
+    print(job_id)
+    try:
+        wait_until_status(job_id, {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED})
+    except KeyboardInterrupt:
+        print("Killing job")
+        client.stop_job(job_id) 
+    logs = client.get_job_logs(job_id)
+    print(logs)

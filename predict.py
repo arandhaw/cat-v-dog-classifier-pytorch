@@ -19,7 +19,7 @@ def image_transform(imagepath):
 def predict(imagepath, verbose=False):
     if not verbose:
         warnings.filterwarnings('ignore')
-    model_path = './models/catvdog.pth'
+    model_path = './results/cat_dog_model.pth'
     try:
         checks_if_model_is_loaded = type(model)
     except:
@@ -37,7 +37,9 @@ def predict(imagepath, verbose=False):
     else:
         return {'class':'cat','confidence':str(topconf.item())}
 
-#print(predict('data/dog1.jpeg'))
-#print(predict('data/cat1.jpeg'))
-#print(predict('data/dog2.jpeg'))
-#print(predict('data/cat2.jpeg'))
+print("Prediction for Dog 1", predict('data/dog1.jpeg'))
+print("Prediction for Cat 1", predict('data/cat1.jpeg'))
+print("Prediction for Dog 2", predict('data/dog2.jpeg'))
+print("Prediction for Cat 2", predict('data/cat2.jpeg'))
+print("Prediction for Dog 3", predict('data/dog3.png'))
+print("Prediction for Cat 3", predict('data/cat3.png'))

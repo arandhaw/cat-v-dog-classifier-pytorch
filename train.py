@@ -1,10 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
-
-
 #get_ipython().run_line_magic('matplotlib', 'inline')
 #get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
-
 import ray
 import os
 import subprocess
@@ -35,18 +32,17 @@ def bash(command, show_result = True):
 
 # loads data on remote machine and returns directory
 def load_data():
-    if not os.path.exists("/cat_dog"):
+    if not os.path.exists("/cat_dog/training_data"):
         bash("sudo mkdir /cat_dog")
-        bash("chmod ugo+rwx /cat_dog")
+        bash("sudo chmod ugo+rwx /cat_dog")
         bash("sudo gsutil cp -r gs://yakoa-model-data/Cats_and_dogs/* /cat_dog")
-        bash("sudo unzip /cat_dog/training_data.zip -d /cat_dog", print = False)
+        bash("sudo unzip /cat_dog/training_data.zip -d /cat_dog", show_result = False)
     if not os.path.exists("/cat_dog/training_data"):
         print("ERROR!!!!! The data directory doesn't exist")
     return "/cat_dog/training_data"
 
 @ray.remote(num_gpus = 1)
 def train_model():
-
     data_dir = load_data()
     print(os.listdir(data_dir))
 
@@ -193,7 +189,7 @@ def train_model():
     testaccuracy = []
     totalsteps = []
     
-    epochs = 0
+    epochs = 1
     steps = 0
     running_loss = 0
     print_every = 5
@@ -247,17 +243,13 @@ def train_model():
         'parameters' : model.parameters,
         'state_dict' : model.state_dict()
     }
-    modelref = ray.put(checkpoint)  # pass checkpoint to ray
+    # modelref = ray.put(checkpoint)  # doesn't work
+    torch.save(checkpoint, "/mnt/shared/catdogmodel.pth")
     # return stuff
     training_record = (traininglosses, testinglosses, testaccuracy, totalsteps)
-    return (training_record, modelref)
+    return training_record
 
-training_record, modelref = ray.get(train_model.remote())
-print("a")
-model = ray.get(modelref)
-print("b")
-torch.save(model, savedir + '/catvdog.pth')
-print("c")
+training_record = ray.get(train_model.remote())
 (traininglosses, testinglosses, testaccuracy, totalsteps) = training_record
 
 plt.plot(totalsteps, traininglosses, label='Train Loss')
@@ -265,5 +257,10 @@ plt.plot(totalsteps, testinglosses, label='Test Loss')
 plt.plot(totalsteps, testaccuracy, label='Test Accuracy')
 plt.legend()
 plt.grid()
-plt.savefig(savedir + '/training_progress.png')
 
+savedir = '/home/arand/cat-v-dog-classifier-pytorch/results'
+plt.savefig("/mnt/shared/training_progress.png")
+
+bash(f"mv /mnt/shared/training_progress.png {savedir}")
+
+bash(f"mv /mnt/shared/catdogmodel.pth {savedir}")
