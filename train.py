@@ -64,14 +64,8 @@ def train_model():
     train_data = datasets.ImageFolder(data_dir + '/train', transform=train_transforms)
     test_data = datasets.ImageFolder(data_dir + '/test', transform=test_transforms)
 
-    train_loader = torch.utils.data.DataLoader(train_data, batch_size=64, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(test_data, batch_size=64)
-
-    train_ref = ray.put(train_loader)
-    test_ref = ray.put(test_loader)
-
-    trainloader = ray.get(train_ref)
-    testloader = ray.get(test_ref)
+    trainloader = torch.utils.data.DataLoader(train_data, batch_size=64, shuffle=True)
+    testloader = torch.utils.data.DataLoader(test_data, batch_size=64)
 
     # We can load in a model such as [DenseNet](http://pytorch.org/docs/0.3.0/torchvision/models.html#id5). Let's print out the model architecture so we can see what's going on.
     model = models.densenet121(pretrained=True)
@@ -237,7 +231,7 @@ def train_model():
                     f"Test loss: {test_loss/len(testloader):.3f}.. "
                     f"Test accuracy: {accuracy/len(testloader):.3f}")
                 running_loss = 0
-                model.train()
+                model.train()   # switch back to train mode
 
     checkpoint = {
         'parameters' : model.parameters,

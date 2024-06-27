@@ -2,11 +2,14 @@
 # coding: utf-8
 #get_ipython().run_line_magic('matplotlib', 'inline')
 #get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
-import ray
 import os
 import subprocess
 import logging
+import tempfile
 
+import ray
+from ray.train import Checkpoint, CheckpointConfig, RunConfig, ScalingConfig
+from ray.train.torch import TorchTrainer
 import matplotlib.pyplot as plt
 import time
 import torch
@@ -19,16 +22,16 @@ output_dir = "/home/arand/cat-v-dog-classifier-pytorch/results"
 
 # function to run bash commands
 # print determines whether output is printed
-def bash(command, show_result = True):
+def bash(command, show_result = False):
     try:
-        print("Running:", command)
+        if show_result == True:
+            print("Running:", command)
         result = subprocess.run(command.split(), capture_output=True, text=True, check=True)
         if show_result:
             print(result.stdout)
     except Exception as e:
-        print("Error occured during:", command)
-        print("Error message:\n")
-        print(e)
+        print("Bash command failed:", command)
+        print("Error message\n", e)
 
 # loads data on remote machine and returns directory
 def load_data():
@@ -41,8 +44,8 @@ def load_data():
         print("ERROR!!!!! The data directory doesn't exist")
     return "/cat_dog/training_data"
 
-@ray.remote(num_gpus = 1)
-def train_model():
+
+def training_function():
     data_dir = load_data()
     print(os.listdir(data_dir))
 
@@ -68,9 +71,11 @@ def train_model():
     trainloader = torch.utils.data.DataLoader(train_data, batch_size=64, shuffle=True)
     testloader = torch.utils.data.DataLoader(test_data, batch_size=64)
 
+    # Wrap data loader with ray 
+    trainloader = ray.train.torch.prepare_data_loader(trainloader)
+    testloader = ray.train.torch.prepare_data_loader(testloader)
+
     # We can load in a model such as [DenseNet](http://pytorch.org/docs/0.3.0/torchvision/models.html#id5). Let's print out the model architecture so we can see what's going on.
-    model = models.densenet121(pretrained=True)
-    # print(model)
     # This model is built out of two main parts, the features and the classifier. 
     # The features part is a stack of convolutional layers and overall works as a feature detector 
     # that can be fed into a classifier. The classifier part is a single fully-connected layer 
@@ -80,15 +85,10 @@ def train_model():
     # In general, I think about pre-trained networks as amazingly good feature detectors that can be 
     # used as the input for simple feed-forward classifiers.
 
-
-
-    # With our model built, we need to train the classifier. However, now we're using a **really deep** neural network. If you try to train this on a CPU like normal, it will take a long, long time. Instead, we're going to use the GPU to do the calculations. The linear algebra computations are done in parallel on the GPU leading to 100x increased training speeds. It's also possible to train on multiple GPUs, further decreasing training time.
-    # 
-    # PyTorch, along with pretty much every other deep learning framework, uses [CUDA](https://developer.nvidia.com/cuda-zone) to efficiently compute the forward and backwards passes on the GPU. In PyTorch, you move your model parameters and other tensors to the GPU memory using `model.to('cuda')`. You can move them back from the GPU with `model.to('cpu')` which you'll commonly do when you need to operate on the network output outside of PyTorch. As a demonstration of the increased speed, I'll compare how long it takes to perform a forward and backward pass with and without a GPU.
-
+    model = models.densenet121(pretrained=True)
+    # print(model)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Training using:", device)
-    model = models.densenet121(pretrained=True)
 
     # Freeze parameters so we don't backprop through them
     for param in model.parameters():
@@ -104,15 +104,12 @@ def train_model():
                                     nn.LogSoftmax(dim=1))
 
     criterion = nn.NLLLoss()
-
     # Only train the classifier parameters, feature parameters are frozen
     optimizer = optim.Adam(model.classifier.parameters(), lr=0.003)
-
     model.to(device)
 
 
-    # In[7]:
-
+    model = ray.train.torch.prepare_model(model)
 
     traininglosses = []
     testinglosses = []
@@ -124,6 +121,11 @@ def train_model():
     running_loss = 0
     print_every = 5
     for epoch in range(epochs):
+
+        if ray.train.get_context().get_world_size() > 1:
+            trainloader.sampler.set_epoch(epoch)
+            testloader.sampler.set_epoch(epoch)
+
         for inputs, labels in trainloader:
             steps += 1
             if steps > 10: 
@@ -141,7 +143,7 @@ def train_model():
 
             running_loss += loss.item()
             
-            if steps % print_every == 0:
+            if steps % print_every == 0 and ray.train.get_context().get_world_rank() == 0:
                 test_loss = 0
                 accuracy = 0
                 model.eval()
@@ -172,32 +174,46 @@ def train_model():
                 running_loss = 0
                 model.train()
 
-    checkpoint = {
-        'parameters' : model.parameters,
-        'state_dict' : model.state_dict()
-    }
-    # modelref = ray.put(checkpoint)  # doesn't work
-    torch.save(checkpoint, "/mnt/shared/catdogmodel.pth")
-    # return stuff
-    training_record = (traininglosses, testinglosses, testaccuracy, totalsteps)
-    return training_record
+                # data to save
+                metrics = {"training loss" : traininglosses[-1], 
+                            "testing loss" : testinglosses[-1], 
+                            "testing accuracy" : testaccuracy[-1], 
+                            "steps" : totalsteps[-1]}
+                checkpoint = {
+                    'parameters' : model.parameters,
+                    'state_dict' : model.state_dict()
+                }
+                # save to any directory
+                with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
+                    torch.save(
+                        checkpoint,
+                        os.path.join(temp_checkpoint_dir, "model.pt")
+                    )
+                    # create a ray report with metrics and the checkpoint path
+                    ray.train.report(
+                        metrics,
+                        checkpoint=ray.train.Checkpoint.from_directory(temp_checkpoint_dir),
+                    )
+                if ray.train.get_context().get_world_rank() == 0:
+                    print("Here are the metrics: ")
+                    print(metrics)
+    
+    print("Finished training")
 
-# training_record = ray.get(train_model.remote())
-#(traininglosses, testinglosses, testaccuracy, totalsteps) = training_record
+trainer = ray.train.torch.TorchTrainer(
+    training_function,
+    scaling_config = ray.train.ScalingConfig(num_workers=2, use_gpu=True),
+    # [5a] If running in a multi-node cluster, this is where you
+    # should configure the run's persistent storage that is accessible
+    # across all worker nodes.
+    run_config=ray.train.RunConfig(storage_path="/mnt/shared", name = "test4"),
+)
 
-#plt.plot(totalsteps, traininglosses, label='Train Loss')
-#plt.plot(totalsteps, testinglosses, label='Test Loss')
-#plt.plot(totalsteps, testaccuracy, label='Test Accuracy')
-#plt.legend()
-#plt.grid()
+result = trainer.fit()
 
-
-#plt.savefig("/mnt/shared/training_progress.png")
+result_path = result.checkpoint.path
+print(result_path)
 
 savedir = '/home/arand/cat-v-dog-classifier-pytorch/results/'
-print(os.path.exists("/mnt/shared/training_progress.png"))
-print(os.path.exists(savedir))
 
-bash(f"sudo mv /mnt/shared/training_progress.png {savedir}")
-
-bash(f"sudo mv /mnt/shared/catdogmodel.pth {savedir}")
+bash(f"sudo cp -r {result_path} {savedir}")
