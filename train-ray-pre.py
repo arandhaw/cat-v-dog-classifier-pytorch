@@ -46,12 +46,12 @@ def setup_environment():
         bash("sudo apt-get -y install nfs-common")
         bash("sudo mkdir -p /shared")
         bash("sudo mount 10.0.24.154:/vol1 /shared")
-        bash("chmod -R 777 /shared")
+        bash("sudo chmod -R 777 /shared")
         # set custom permissions for shared directory
         bash("sudo apt-get install acl")
-        bash("bash chmod g+s /shared")
-        bash("setfacl -d -m g::rwx /shared")
-        bash("setfacl -d -m o::rwx /shared")
+        bash("sudo chmod g+s /shared")
+        bash("sudo setfacl -d -m g::rwx /shared")
+        bash("sudo setfacl -d -m o::rwx /shared")
     
     if not os.path.exists("/cat_dog/training_data"):
         print("ERROR!!!!! The shared directory doesn't exist")
@@ -137,8 +137,8 @@ def training_function(train_loop_config):
             state_dict = torch.load(checkpoint_dir + "/checkpoint.pth")
             model.load_state_dict(state_dict['model_state_dict'])
             optimizer.load_state_dict(state_dict['optimizer_state_dict'])
-            start_epoch = state_dict['epoch']
-            start_step = state_dict['step']
+            start_epoch = state_dict['metrics']['epoch']
+            start_step = state_dict['metrics']['step'] + 1
 
     for epoch in range(start_epoch, epochs):
         # this shuffles the data each epoch
@@ -147,7 +147,7 @@ def training_function(train_loop_config):
             testloader.sampler.set_epoch(epoch)
 
         for step, (inputs, labels) in enumerate(trainloader, start=start_step):
-            if step > 100: 
+            if step > 10: 
                 break
                 
             # Move input and label tensors to the default device
@@ -217,6 +217,9 @@ def training_function(train_loop_config):
                         metrics,
                         checkpoint=ray.train.Checkpoint.from_directory(temp_checkpoint_dir),
                     )
+            if step == 4 and ray.train.get_context().get_local_rank() == 0:
+                print("throwing error to mimic preemption")
+                raise Exception("oh no, something happened")
     print("Finished training")
 
 trainer = ray.train.torch.TorchTrainer(
@@ -226,7 +229,7 @@ trainer = ray.train.torch.TorchTrainer(
     # [5a] If running in a multi-node cluster, this is where you
     # should configure the run's persistent storage that is accessible
     # across all worker nodes.
-    run_config=ray.train.RunConfig(storage_path="/shared", name = "new_world=pre",
+    run_config=ray.train.RunConfig(storage_path="/shared", name = "new-world-pre",
                                 failure_config=train.FailureConfig(max_failures=2))
 )
 
@@ -235,5 +238,6 @@ result = trainer.fit()
 result_path = result.checkpoint.path
 print("Path of final checkpoint", result_path)
 
+bash(f"sudo cp -rf {result_path} /home/arand/cat-v-dog-classifier-pytorch/models")
 # savedir = '/home/arand/cat-v-dog-classifier-pytorch/results/'
 # bash(f"sudo cp -r {result_path} {savedir}")

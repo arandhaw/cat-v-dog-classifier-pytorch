@@ -44,12 +44,12 @@ def setup_environment():
         bash("sudo apt-get -y install nfs-common")
         bash("sudo mkdir -p /shared")
         bash("sudo mount 10.0.24.154:/vol1 /shared")
-        bash("chmod -R 777 /shared")
+        bash("sudo chmod -R 777 /shared")
         # set custom permissions for shared directory
         bash("sudo apt-get install acl")
-        bash("bash chmod g+s /shared")
-        bash("setfacl -d -m g::rwx /shared")
-        bash("setfacl -d -m o::rwx /shared")
+        bash("sudo chmod g+s /shared")
+        bash("sudo setfacl -d -m g::rwx /shared")
+        bash("sudo setfacl -d -m o::rwx /shared")
     
     if not os.path.exists("/cat_dog/training_data"):
         print("ERROR!!!!! The shared directory doesn't exist")
