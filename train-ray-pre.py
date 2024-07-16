@@ -1,3 +1,5 @@
+# Premption safe example for cat dog
+
 # first party libs
 import os
 import subprocess
@@ -54,7 +56,7 @@ def setup_environment():
     if not os.path.exists("/cat_dog/training_data"):
         print("ERROR!!!!! The shared directory doesn't exist")
 
-
+# main training function - all logic for training must be contained here
 def training_function(train_loop_config):
     setup_environment()
     data_dir = "/cat_dog/training_data"
@@ -119,20 +121,33 @@ def training_function(train_loop_config):
     testinglosses = []
     testaccuracy = []
     totalsteps = []
-    
-    epochs = 1
-    steps = 0
+
     running_loss = 0
+
+    epochs = 1
     print_every = 5
-    for epoch in range(epochs):
+    start_epoch = 0
+    start_step = 0
+    
+    checkpoint = ray.train.get_checkpoint()  # returns most recent checkpoint, or None 
+    # load checkpoint if it exists
+    if checkpoint:
+        print("Loading checkpoint")
+        with checkpoint.as_directory() as checkpoint_dir:
+            state_dict = torch.load(checkpoint_dir + "/checkpoint.pth")
+            model.load_state_dict(state_dict['model_state_dict'])
+            optimizer.load_state_dict(state_dict['optimizer_state_dict'])
+            start_epoch = state_dict['epoch']
+            start_step = state_dict['step']
+
+    for epoch in range(start_epoch, epochs):
         # this shuffles the data each epoch
         if ray.train.get_context().get_world_size() > 1:
             trainloader.sampler.set_epoch(epoch)
             testloader.sampler.set_epoch(epoch)
 
-        for inputs, labels in trainloader:
-            steps += 1
-            if steps > 10: 
+        for step, (inputs, labels) in enumerate(trainloader, start=start_step):
+            if step > 100: 
                 break
                 
             # Move input and label tensors to the default device
@@ -147,7 +162,7 @@ def training_function(train_loop_config):
 
             running_loss += loss.item()
             
-            if steps % print_every == 0:
+            if (step + 1) % print_every == 0:
                 test_loss = 0
                 accuracy = 0
                 model.eval()
@@ -168,10 +183,10 @@ def training_function(train_loop_config):
                 traininglosses.append(running_loss/print_every)
                 testinglosses.append(test_loss/len(testloader))
                 testaccuracy.append(accuracy/len(testloader))
-                totalsteps.append(steps)
+                totalsteps.append(step)
                 print(f"Device {device}.."
                     f"Epoch {epoch+1}/{epochs}.. "
-                    f"Step {steps}.. "
+                    f"Step {step}.. "
                     f"Train loss: {running_loss/print_every:.3f}.. "
                     f"Test loss: {test_loss/len(testloader):.3f}.. "
                     f"Test accuracy: {accuracy/len(testloader):.3f}")
@@ -182,7 +197,8 @@ def training_function(train_loop_config):
                 metrics = {"training loss" : traininglosses[-1], 
                             "testing loss" : testinglosses[-1], 
                             "testing accuracy" : testaccuracy[-1], 
-                            "steps" : totalsteps[-1]
+                            "epoch" : epoch,
+                            "step" : step
                             }
                 checkpoint = {
                     'parameters' : model.parameters,
@@ -191,16 +207,16 @@ def training_function(train_loop_config):
                 }
                 # save to any directory
                 with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
-                    torch.save(
-                        checkpoint,
-                        os.path.join(temp_checkpoint_dir, "model.pth")
-                    )
+                    torch.save({
+                        'metrics' : metrics,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict()
+                    }, temp_checkpoint_dir + "/checkpoint.pth")
                     # create a ray report with metrics and the checkpoint path
                     ray.train.report(
                         metrics,
                         checkpoint=ray.train.Checkpoint.from_directory(temp_checkpoint_dir),
                     )
-    
     print("Finished training")
 
 trainer = ray.train.torch.TorchTrainer(
@@ -210,14 +226,14 @@ trainer = ray.train.torch.TorchTrainer(
     # [5a] If running in a multi-node cluster, this is where you
     # should configure the run's persistent storage that is accessible
     # across all worker nodes.
-    run_config=ray.train.RunConfig(storage_path="/shared", name = "new_world",
-                                    failure_config=train.FailureConfig(max_failures=1))
+    run_config=ray.train.RunConfig(storage_path="/shared", name = "new_world=pre",
+                                failure_config=train.FailureConfig(max_failures=2))
 )
 
 result = trainer.fit()
 
 result_path = result.checkpoint.path
-print(result_path)
+print("Path of final checkpoint", result_path)
 
 # savedir = '/home/arand/cat-v-dog-classifier-pytorch/results/'
 # bash(f"sudo cp -r {result_path} {savedir}")

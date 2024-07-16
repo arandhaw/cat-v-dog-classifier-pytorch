@@ -19,7 +19,7 @@ def image_transform(imagepath):
 def predict(imagepath, verbose=False):
     if not verbose:
         warnings.filterwarnings('ignore')
-    model_path = './results/checkpoint_000001/model.pt'
+    model_path = 'models/catdogmodel.pth'
     try:
         checks_if_model_is_loaded = type(model)
     except:
