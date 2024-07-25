@@ -205,6 +205,10 @@ def training_function(train_loop_config):
                     'state_dict' : model.state_dict(),
                     'metrics' : metrics
                 }
+                if step == 4 and ray.train.get_context().get_local_rank() == 0:
+                    print("pausing to mimic preemption")
+                    #while True:
+                    #    pass
                 # save to any directory
                 with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
                     torch.save({
@@ -217,9 +221,7 @@ def training_function(train_loop_config):
                         metrics,
                         checkpoint=ray.train.Checkpoint.from_directory(temp_checkpoint_dir),
                     )
-            if step == 4 and ray.train.get_context().get_local_rank() == 0:
-                print("throwing error to mimic preemption")
-                raise Exception("oh no, something happened")
+            
     print("Finished training")
 
 trainer = ray.train.torch.TorchTrainer(
