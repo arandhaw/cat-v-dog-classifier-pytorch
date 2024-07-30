@@ -58,6 +58,7 @@ def setup_environment():
 
 # main training function - all logic for training must be contained here
 def training_function(train_loop_config):
+    print(f"Training started on worker of rank {ray.train.get_context().get_local_rank()}")
     setup_environment()
     data_dir = "/cat_dog/training_data"
 
@@ -147,7 +148,7 @@ def training_function(train_loop_config):
             testloader.sampler.set_epoch(epoch)
 
         for step, (inputs, labels) in enumerate(trainloader, start=start_step):
-            if step > 10: 
+            if step > 20: 
                 break
                 
             # Move input and label tensors to the default device
@@ -205,10 +206,10 @@ def training_function(train_loop_config):
                     'state_dict' : model.state_dict(),
                     'metrics' : metrics
                 }
-                if step == 4 and ray.train.get_context().get_local_rank() == 0:
-                    print("pausing to mimic preemption")
-                    #while True:
-                    #    pass
+                #if step == 4 and ray.train.get_context().get_local_rank() == 0:
+                #    print("pausing to mimic preemption")
+                #    while True:
+                #        pass
                 # save to any directory
                 with tempfile.TemporaryDirectory() as temp_checkpoint_dir:
                     torch.save({
@@ -235,6 +236,7 @@ trainer = ray.train.torch.TorchTrainer(
                                 failure_config=train.FailureConfig(max_failures=2))
 )
 
+setup_environment()
 result = trainer.fit()
 
 result_path = result.checkpoint.path

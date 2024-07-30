@@ -50,7 +50,7 @@ def training_function():
     time.sleep(2)
     load_data()
     time.sleep(2)
-    print(f"Shared directory status: {os.path.exists('/mnt/shared')}")
+    print(f"Shared directory status: {os.path.exists('/shared')}")
     time.sleep(2)
     print("Is torch available", torch.cuda.is_available())
     

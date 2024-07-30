@@ -21,11 +21,11 @@ def wait_until_status(job_id, status_to_wait_for):
 client = JobSubmissionClient("http://127.0.0.1:8265")
 job_id = client.submit_job(
     # Entrypoint shell command to execute
-    entrypoint="python train-ray-pre.py",
+    entrypoint="python ray_test.py",
     # Path to the local directory that contains the script.py file
     runtime_env={"working_dir": "./", 
-                "excludes" : [".git*", "models/*"]
-                #"pip" : ["torch", "torchvision"]
+                "excludes" : [".git*", "models/*"],
+                "pip" : ["torch", "torchvision"]
                 }
 )
 print(job_id)
