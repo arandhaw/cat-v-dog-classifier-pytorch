@@ -19,18 +19,20 @@ from torch import optim
 import torch.nn.functional as F
 from torchvision import datasets, transforms, models
 
-# function to run bash commands
-# print determines whether output is printed
+
+# convenience function for bash commands
 def bash(command, show_result = False):
     try:
         if show_result == True:
             print("Running:", command)
-        result = subprocess.run(command.split(), capture_output=True, text=True, check=True)
+        result = subprocess.run(command, shell = True, capture_output=True, text=True, check=True)
         if show_result:
             print(result.stdout)
     except Exception as e:
         print("Bash command failed:", command)
         print("Error message\n", e)
+
+
 
 def setup_environment():
     # download data from bucket
@@ -42,19 +44,18 @@ def setup_environment():
     if not os.path.exists("/cat_dog/training_data"):
         print("ERROR!!!!! Could not get data from bucket")
     # setup shared directory
-    if not os.path.exists("/shared/hello-world"):
-        bash("sudo apt-get -y install nfs-common")
-        bash("sudo mkdir -p /shared")
-        bash("sudo mount 10.0.24.154:/vol1 /shared")
-        bash("sudo chmod -R 777 /shared")
-        # set custom permissions for shared directory
-        bash("sudo apt-get install acl")
-        bash("sudo chmod g+s /shared")
-        bash("sudo setfacl -d -m g::rwx /shared")
-        bash("sudo setfacl -d -m o::rwx /shared")
-    
-    if not os.path.exists("/cat_dog/training_data"):
-        print("ERROR!!!!! The shared directory doesn't exist")
+    # if not os.path.exists("/shared/hello-world"):
+    #     bash("sudo apt-get -y install nfs-common")
+    #     bash("sudo mkdir -p /shared")
+    #     bash("sudo mount 10.0.24.154:/vol1 /shared")
+    #     bash("sudo chmod -R 777 /shared")
+    #     # set custom permissions for shared directory
+    #     bash("sudo apt-get install acl")
+    #     bash("sudo chmod g+s /shared")
+    #     bash("sudo setfacl -d -m g::rwx /shared")
+    #     bash("sudo setfacl -d -m o::rwx /shared")
+    # if not os.path.exists("/cat_dog/training_data"):
+    #     print("ERROR!!!!! The shared directory doesn't exist")
 
 # main training function - all logic for training must be contained here
 def training_function(train_loop_config):
@@ -124,9 +125,9 @@ def training_function(train_loop_config):
     totalsteps = []
 
     running_loss = 0
-
     epochs = 1
     print_every = 5
+
     start_epoch = 0
     start_step = 0
     
@@ -135,11 +136,16 @@ def training_function(train_loop_config):
     if checkpoint:
         print("Loading checkpoint")
         with checkpoint.as_directory() as checkpoint_dir:
-            state_dict = torch.load(checkpoint_dir + "/checkpoint.pth")
-            model.load_state_dict(state_dict['model_state_dict'])
-            optimizer.load_state_dict(state_dict['optimizer_state_dict'])
-            start_epoch = state_dict['metrics']['epoch']
-            start_step = state_dict['metrics']['step'] + 1
+            checkpoint = torch.load(checkpoint_dir + "/checkpoint.pth")
+            metrics = checkpoint["metrics"]
+            model.load_state_dict(checkpoint["model_state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+            start_epoch = metrics["epoch"]
+            start_step = metrics["step"] + 1
+            traininglosses = metrics["training loss"]
+            testinglosses = metrics["testing loss"]
+            testaccuracy = metrics["testing accuracy"]
 
     for epoch in range(start_epoch, epochs):
         # this shuffles the data each epoch
@@ -148,9 +154,7 @@ def training_function(train_loop_config):
             testloader.sampler.set_epoch(epoch)
 
         for step, (inputs, labels) in enumerate(trainloader, start=start_step):
-            if step > 20: 
-                break
-                
+
             # Move input and label tensors to the default device
             inputs, labels = inputs.to(device), labels.to(device)
             
@@ -195,17 +199,17 @@ def training_function(train_loop_config):
                 model.train()
 
                 # data to save
-                metrics = {"training loss" : traininglosses[-1], 
-                            "testing loss" : testinglosses[-1], 
-                            "testing accuracy" : testaccuracy[-1], 
+                metrics = {"training loss" : traininglosses, 
+                            "testing loss" : testinglosses, 
+                            "testing accuracy" : testaccuracy, 
                             "epoch" : epoch,
                             "step" : step
                             }
-                checkpoint = {
-                    'parameters' : model.parameters,
-                    'state_dict' : model.state_dict(),
-                    'metrics' : metrics
-                }
+                # checkpoint = {
+                #     'parameters' : model.parameters,
+                #     'state_dict' : model.state_dict(),
+                #     'metrics' : metrics
+                # }
                 #if step == 4 and ray.train.get_context().get_local_rank() == 0:
                 #    print("pausing to mimic preemption")
                 #    while True:
@@ -222,6 +226,8 @@ def training_function(train_loop_config):
                         metrics,
                         checkpoint=ray.train.Checkpoint.from_directory(temp_checkpoint_dir),
                     )
+                if step == 4:
+                    raise Exception("Hi")
             
     print("Finished training")
 
@@ -232,7 +238,7 @@ trainer = ray.train.torch.TorchTrainer(
     # [5a] If running in a multi-node cluster, this is where you
     # should configure the run's persistent storage that is accessible
     # across all worker nodes.
-    run_config=ray.train.RunConfig(storage_path="/shared", name = "new-world-pre",
+    run_config=ray.train.RunConfig(storage_path="/shared", name = "my_task",
                                 failure_config=train.FailureConfig(max_failures=2))
 )
 
